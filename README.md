@@ -1,2 +1,4 @@
 # takala-bako
-takala-bako project
+
+汎用性の高いプログラムをストックするリポジトリです．
+

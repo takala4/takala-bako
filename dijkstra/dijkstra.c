@@ -32,11 +32,11 @@ typedef struct _node
 
 //Function prottype===============================================
 //-------------------------------------------
-int input_parameter_data(char *folder_path_, int *Num_Node_, int *Num_Link_);
-int input_netwok_data(char *folder_path_, Link_t *Link_table_, Node_t *Node_table_, int *Num_Node_);
+int input_parameter_data(char *folder_path_, int *Num_Link_, int *Num_Node_);
+int input_netwok_data(char *folder_path_, Link_t *Link_table_, int *Num_Link_, Node_t *Node_table_, int *Num_Node_);
 
 //-------------------------------------------
-int dijkstra(Link_t *Link_table_, int *Num_Link_, Node_t *Node_table_, int *Num_Node_, int *heap_tree_, int* last_position_);
+int dijkstra(Link_t *Link_table_, int *Num_Link_, Node_t *Node_table_, int *Num_Node_);//, int *heap_tree_, int* last_position_);
 int pickup_heap(int *heap_tree_, int *last_position_, Node_t *Node_table_);
 int add_heap(int *heap_tree_, int *last_position_, Node_t *Node_table_, int add_node_id_);
 int up_heap(int *heap_tree_, Node_t *Node_table_, int tr_position_);
@@ -67,22 +67,14 @@ int main()
 
     //Input network data------------------------
     printf("dbg2\n");
-    input_netwok_data(folder_path, Link_table, Node_table, Num_Node);
+    input_netwok_data(folder_path, Link_table, Num_Link, Node_table, Num_Node);
     printf("dbg3\n");
 
-    //-------------------------------
+    printf("Link:%i\n", *Num_Link);
+    printf("Node:%i\n", *Num_Node);
 
-    printf("dbg6\n");
-    getchar();
-    int *last_position = malloc(sizeof(int));
-    printf("dbg7\n");
-    *last_position = 1;
-    int pivot_node_id = 0;
-    int heap_tree[*Num_Node + 1];
-    heap_tree[1] = pivot_node_id; //Set Origin Node ID
-    //-------------------------------
 
-    dijkstra(Link_table, Num_Link, Node_table, Num_Node, heap_tree, last_position);
+    dijkstra(Link_table, Num_Link, Node_table, Num_Node);
 
     for (int tr_link_id = 1; tr_link_id <= *Num_Link; ++tr_link_id)
     {
@@ -94,39 +86,41 @@ int main()
         printf("node-id:%i\tspl:%f\n", tr_node_id, Node_table[tr_node_id].spl);
     }
 
-    
-
+    free(Num_Link);
+    free(Num_Node);
+    free(Link_table);
+    free(Node_table);
     return 0;
 }
 
 //dijkstra=======================================================
-int dijkstra(Link_t *Link_table_, int *Num_Link_, Node_t *Node_table_, int *Num_Node_, int *heap_tree_, int *last_position_)
+int dijkstra(Link_t *Link_table_, int *Num_Link_, Node_t *Node_table_, int *Num_Node_)
 {
     printf("dbg4\n");
     int pivot_node_id = 0;
     Node_table_[pivot_node_id].spl = 0;
-    printf("dbg5\n");
 
-    // //-------------------------------
-    // int *heap_tree = malloc((*Num_Node_ + 1) * sizeof(int));
-    // heap_tree[1] = pivot_node_id; //Set Origin Node ID
+
+    int *heap_tree = malloc((*Num_Node_ + 1) * sizeof(int));
+    heap_tree[1] = pivot_node_id; //Set Origin Node ID
     
-    // printf("dbg6\n");
-    // int *last_position = malloc(sizeof(int));
-    // *last_position = 1;
-    // printf("dbg7\n");
-    // //-------------------------------
+    int *last_position = malloc(sizeof(int));
+    *last_position = 1;
+    
+
 
     while (1)
     {
-        pivot_node_id = pickup_heap(heap_tree_, last_position_, Node_table_);
+        printf("==================================");
+        pivot_node_id = pickup_heap(heap_tree, last_position, Node_table_);
 
-        printf("dbg8\n");
+        printf("pivot_node_id:%i\n", pivot_node_id);
+        printf("last_position:%i\n", *last_position);
 
         int tr_link_id = Node_table_[pivot_node_id].first_outlink_id;
         while (tr_link_id != -1)
         {
-            printf("dbg9\n");
+            printf("tr_link_id:%i\n", tr_link_id);
             int tr_node_id = Link_table_[tr_link_id].to_node_id;
             if (Node_table_[tr_node_id].search_flag != 2)
             {
@@ -134,7 +128,8 @@ int dijkstra(Link_t *Link_table_, int *Num_Link_, Node_t *Node_table_, int *Num_
                 if (Node_table_[tr_node_id].spl > Node_table_[pivot_node_id].spl + Link_table_[tr_link_id].FFT)
                 {
                     Node_table_[tr_node_id].spl = Node_table_[pivot_node_id].spl + Link_table_[tr_link_id].FFT;
-                    add_heap(heap_tree_, last_position_, Node_table_, tr_node_id);
+                    printf("Add node %i\n", tr_node_id);
+                    add_heap(heap_tree, last_position, Node_table_, tr_node_id);
                 }
             }
             tr_link_id = Link_table_[tr_link_id].next_outlink_id;
@@ -143,13 +138,13 @@ int dijkstra(Link_t *Link_table_, int *Num_Link_, Node_t *Node_table_, int *Num_
 
         Node_table_[pivot_node_id].search_flag = 2;
 
-        if (*last_position_ == 1)
+        if (*last_position == 0)
         {
             break;
         }
     }
-    // free(last_position);
-    // free(heap_tree);
+    free(last_position);
+    free(heap_tree);
     return 0;
 }
 
@@ -164,6 +159,9 @@ int add_heap(int *heap_tree_, int *last_position_, Node_t *Node_table_, int add_
         heap_tree_[add_position] = add_node_id_;
         Node_table_[add_node_id_].heap_position = add_position;
         *last_position_ = add_position;
+        
+        printf("last_posi:%i\n", *last_position_);
+        getchar();
 
         up_heap(heap_tree_, Node_table_, add_position);
     }
@@ -183,6 +181,8 @@ int pickup_heap(int *heap_tree_, int *last_position_, Node_t *Node_table_)
     int last_position = *last_position_;
 
     heap_tree_[1] = heap_tree_[last_position];
+    Node_table_[heap_tree_[last_position]].heap_position = 1;
+
     *last_position_ = last_position - 1;
 
     down_heap(heap_tree_, last_position_, Node_table_, 1);
@@ -204,7 +204,7 @@ int down_heap(int *heap_tree_, int *last_position_, Node_t *Node_table_, int tr_
         {
             small_child_position = child1_position;
         }
-        else if (Node_table_[heap_tree_[child1_position]].spl < Node_table_[heap_tree_[child1_position]].spl)
+        else if (Node_table_[heap_tree_[child1_position]].spl < Node_table_[heap_tree_[child2_position]].spl)
         {
             small_child_position = child1_position;
         }
@@ -215,10 +215,14 @@ int down_heap(int *heap_tree_, int *last_position_, Node_t *Node_table_, int tr_
 
         if (Node_table_[heap_tree_[tr_position]].spl > Node_table_[heap_tree_[small_child_position]].spl)
         {
-            heap_tree_[tr_position] = heap_tree_[small_child_position];
+            int tmp_smallest_node_id = heap_tree_[small_child_position];
+
             heap_tree_[small_child_position] = heap_tree_[tr_position];
-            Node_table_[heap_tree_[small_child_position]].heap_position = tr_position;
             Node_table_[heap_tree_[tr_position]].heap_position = small_child_position;
+
+            heap_tree_[tr_position] = tmp_smallest_node_id;
+            Node_table_[tmp_smallest_node_id].heap_position = tr_position;
+
             tr_position = small_child_position;
         }
         else
@@ -241,10 +245,14 @@ int up_heap(int *heap_tree_, Node_t *Node_table_, int tr_position_)
         parent_position = tr_position / 2;
         if (Node_table_[heap_tree_[parent_position]].spl < Node_table_[heap_tree_[tr_position]].spl)
         {
-            heap_tree_[tr_position] = heap_tree_[parent_position];
+            int tmp_smallest_node_id = heap_tree_[parent_position];
+
             heap_tree_[parent_position] = heap_tree_[tr_position];
-            Node_table_[heap_tree_[parent_position]].heap_position = tr_position;
             Node_table_[heap_tree_[tr_position]].heap_position = parent_position;
+
+            heap_tree_[tr_position] = tmp_smallest_node_id;
+            Node_table_[tmp_smallest_node_id].heap_position = tr_position;
+
             tr_position = parent_position;
         }
         else
@@ -256,7 +264,7 @@ int up_heap(int *heap_tree_, Node_t *Node_table_, int tr_position_)
 }
 
 // Input paremeter data function===================================
-int input_parameter_data(char *folder_path_, int *Num_Node_, int *Num_Link_)
+int input_parameter_data(char *folder_path_, int *Num_Link_, int *Num_Node_)
 {
     char tmp_folder_path[50];
     strcpy(tmp_folder_path, folder_path_);
@@ -274,7 +282,7 @@ int input_parameter_data(char *folder_path_, int *Num_Node_, int *Num_Link_)
 //--------------------------------------------
 
 // Input networks data function====================================
-int input_netwok_data(char *folder_path_, Link_t *Link_table_, Node_t *Node_table_, int *Num_Node_)
+int input_netwok_data(char *folder_path_, Link_t *Link_table_, int *Num_Link_, Node_t *Node_table_, int *Num_Node_)
 {
     //Init Node_table----------------------------
     for (int i = 0; i <= *Num_Node_; ++i)
@@ -283,7 +291,7 @@ int input_netwok_data(char *folder_path_, Link_t *Link_table_, Node_t *Node_tabl
         Node_table_[i].first_inlink_id = -1;
         Node_table_[i].first_outlink_id = -1;
         Node_table_[i].heap_position = -1; //heap
-        Node_table_[i].spl = 999999;           //Shortest path length
+        Node_table_[i].spl = 999999;         //Shortest path length
         Node_table_[i].search_flag = 0;   //Use in dijkstra
     }
 
@@ -297,7 +305,7 @@ int input_netwok_data(char *folder_path_, Link_t *Link_table_, Node_t *Node_tabl
         exit(1);
     }
     int Link_id = 1;
-    while (!feof(input_file))
+    while (Link_id <= *Num_Link_)
     {
         int from_node_id;
         int to_node_id;
@@ -361,4 +369,3 @@ int input_netwok_data(char *folder_path_, Link_t *Link_table_, Node_t *Node_tabl
     fclose(input_file);
     return 0;
 }
-

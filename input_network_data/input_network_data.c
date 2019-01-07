@@ -29,8 +29,8 @@ typedef struct _node
 } Node_t;
 
 //Function prottype===============================================
-int input_parameter_data(char *folder_path_, int *Num_Node_, int *Num_Link_);
-int input_netwok_data(char *folder_path_, Link_t *Link_table_, Node_t *Node_table_, int *Num_Node_);
+int input_parameter_data(char *folder_path_, int *Num_Link_, int *Num_Node_);
+int input_netwok_data(char *folder_path_, Link_t *Link_table_, int *Num_Link_, Node_t *Node_table_, int *Num_Node_);
 
 //main============================================================
 int main(){
@@ -56,8 +56,11 @@ int main(){
 
      //Input network data------------------------
     printf("dbg2\n");
-    input_netwok_data(folder_path, Link_table, Node_table, Num_Node);
+    input_netwok_data(folder_path, Link_table, Num_Link, Node_table, Num_Node);
     printf("dbg3\n");
+
+    printf("Link:%i\n", *Num_Link);
+    printf("Node:%i\n", *Num_Node);
 
     for(int tr_link_id=1; tr_link_id <= *Num_Link; ++tr_link_id)
     {
@@ -68,7 +71,7 @@ int main(){
 }
 
 // Input paremeter data function===================================
-int input_parameter_data(char *folder_path_, int *Num_Node_, int *Num_Link_)
+int input_parameter_data(char *folder_path_, int *Num_Link_, int *Num_Node_)
 {
     char tmp_folder_path[50];
     strcpy(tmp_folder_path, folder_path_);
@@ -86,7 +89,7 @@ int input_parameter_data(char *folder_path_, int *Num_Node_, int *Num_Link_)
 //--------------------------------------------
 
 // Input networks data function====================================
-int input_netwok_data(char *folder_path_, Link_t *Link_table_, Node_t *Node_table_, int *Num_Node_)
+int input_netwok_data(char *folder_path_, Link_t *Link_table_, int *Num_Link_, Node_t *Node_table_, int *Num_Node_)
 {
     //Init Node_table----------------------------
     for (int i = 0; i <= *Num_Node_; ++i)
@@ -106,7 +109,7 @@ int input_netwok_data(char *folder_path_, Link_t *Link_table_, Node_t *Node_tabl
         exit(1);
     }
     int Link_id = 1;
-    while (!feof(input_file))
+    while (Link_id <= *Num_Link_)
     {
         int from_node_id;
         int to_node_id;

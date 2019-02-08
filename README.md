@@ -7,4 +7,5 @@
 * ネットワークデータの読み取りモジュール
 * 最短経路探索
 
-![](https://charty.live/charts?chtype=pielegend&chl=Mon,Tue,Wed&chd=100,90,198&cht=Daily%20Data&chtc=000000&chaxc=000000)
+<object data="https://charty.live/charts?chtype=areasimple&chl=Mon,Tue,Wed&chd=100,90,198&cht=Daily Data&chtc=000000&chaxc=000022&chdc=000080&chld=Bob">
+</object>

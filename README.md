@@ -1,9 +1,11 @@
 # takala-bako
 
-汎用性の高いプログラムをストックするリポジトリです．
+This repository stocks versatile programs.
 
-# プログラム一覧
+個人的によく使うコードをストックするリポジトリです．
 
-* ネットワークデータの読み取りモジュール
-* 最短経路探索
-* Gausse-Seidel法
+# Programs
+
+* reading network data module
+* dijkstra
+* Gausse-Seidel

@@ -5,7 +5,6 @@ A C function to read a simple road network data
 # Road Network
 
 * Each node id are integer
-* 
 
 # Input Data format
 
@@ -24,6 +23,3 @@ A C function to read a simple road network data
 <img src="image/4N5L.png" width="61.8%" >
 
 # Usage
-
-#
-

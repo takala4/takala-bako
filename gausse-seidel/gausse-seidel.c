@@ -24,11 +24,11 @@ typedef struct _vector
 
 
 //Sparce Matrix=================================================
-typedef struct _s_matrix
-{
-    S_Matrix_t* next_cell;
-    float value;
-}S_Matrix_t;
+// typedef struct _s_matrix
+// {
+//     S_Matrix_t* next_cell;
+//     float value;
+// }S_Matrix_t;
 
 
 //Create Matrix structure========================================
@@ -140,22 +140,23 @@ int check_diagonaly_dominant(Matrix_t* M_, Vector_t* b_, int s)
     return 0;
 }
 
-S_Matrix_t cheak_sparce(Matrix_t *M_, int s)
-{
-    S_Matrix_t *SM = malloc(s * sizeof(S_Matrix_t));
+//Check sparse matrix==========================
+// S_Matrix_t cheak_sparce(Matrix_t *M_, int s)
+// {
+//     S_Matrix_t *SM = malloc(s * sizeof(S_Matrix_t));
 
-    for (int i = 0; i < s; ++i)
-    {
-        for(int j=0; j<s; ++j)
-        {
-            if(M_[convert_index(i,j,s)].value != 0)
-            {
-                S_Matrix_t* NEW_SM = malloc(sizeof(S_Matrix_t));
+//     for (int i = 0; i < s; ++i)
+//     {
+//         for(int j=0; j<s; ++j)
+//         {
+//             if(M_[convert_index(i,j,s)].value != 0)
+//             {
+//                 S_Matrix_t* NEW_SM = malloc(sizeof(S_Matrix_t));
                 
-            }
-        }
-    }
-}
+//             }
+//         }
+//     }
+// }
 
 
 //Main function================================================
@@ -194,8 +195,11 @@ int main()
         return 1;
     }
 
+    
+    //Gausse-Sidel
     GS_method(M, b, x, s);
 
+    //Output solution
     for (int i = 0; i < s; ++i)
     {
         printf("x%i = %f\n", i, x[i].value);

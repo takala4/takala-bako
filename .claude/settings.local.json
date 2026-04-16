@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git *)",
+      "Bash(xargs grep *)",
+      "Bash(curl -sL https://raw.githubusercontent.com/hanqiu92/itapas/master/README.md)",
+      "Bash(gh api *)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebSearch",
+      "WebFetch(domain:www.sciencedirect.com)",
+      "WebFetch(domain:ieeexplore.ieee.org)",
+      "WebFetch(domain:ideas.repec.org)",
+      "WebFetch(domain:www.researchgate.net)",
+      "WebFetch(domain:sboyles.github.io)",
+      "Bash(curl -s \"https://api.github.com/repos/HanZhengIntelliTransport/GMNS_Plus_Dataset/contents/\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/HanZhengIntelliTransport/GMNS_Plus_Dataset/main/SiouxFalls/node.csv\")",
+      "Bash(python3 -c \"import json,sys; data=json.load\\(sys.stdin\\); [print\\(d['name']\\) for d in data if 'sioux' in d['name'].lower\\(\\) or 'Sioux' in d['name']]\")",
+      "Bash(curl *)",
+      "Bash(python *)"
+    ]
+  }
+}

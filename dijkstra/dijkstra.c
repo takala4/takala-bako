@@ -1,4 +1,4 @@
-//Inclue header file==============================================
+//Include header file==============================================
 #include <stdio.h>
 #include <stdlib.h>
 #include <malloc.h>
@@ -33,7 +33,7 @@ typedef struct _node
 //Function prottype===============================================
 //-------------------------------------------
 int input_parameter_data(char *folder_path_, int *Num_Link_, int *Num_Node_);
-int input_netwok_data(char *folder_path_, Link_t *Link_table_, int *Num_Link_, Node_t *Node_table_, int *Num_Node_);
+int input_network_data(char *folder_path_, Link_t *Link_table_, int *Num_Link_, Node_t *Node_table_, int *Num_Node_);
 
 //-------------------------------------------
 int dijkstra(Link_t *Link_table_, int *Num_Link_, Node_t *Node_table_, int *Num_Node_);//, int *heap_tree_, int* last_position_);
@@ -58,7 +58,6 @@ int main()
     //Input parameter data-----------------------
     input_parameter_data(folder_path, Num_Link, Num_Node);
 
-    printf("dbg1\n");
     //Construct Node_t array and Link_t array-----
     int node_table_len = *Num_Node + 1;
     int link_table_len = *Num_Link + 1;
@@ -66,9 +65,7 @@ int main()
     Link_t *Link_table = malloc(link_table_len * sizeof(Link_t));
 
     //Input network data------------------------
-    printf("dbg2\n");
-    input_netwok_data(folder_path, Link_table, Num_Link, Node_table, Num_Node);
-    printf("dbg3\n");
+    input_network_data(folder_path, Link_table, Num_Link, Node_table, Num_Node);
 
     printf("Link:%i\n", *Num_Link);
     printf("Node:%i\n", *Num_Node);
@@ -96,7 +93,6 @@ int main()
 //dijkstra=======================================================
 int dijkstra(Link_t *Link_table_, int *Num_Link_, Node_t *Node_table_, int *Num_Node_)
 {
-    printf("dbg4\n");
     int pivot_node_id = 0;
     Node_table_[pivot_node_id].spl = 0;
 
@@ -111,16 +107,11 @@ int dijkstra(Link_t *Link_table_, int *Num_Link_, Node_t *Node_table_, int *Num_
 
     while (1)
     {
-        printf("==================================");
         pivot_node_id = pickup_heap(heap_tree, last_position, Node_table_);
-
-        printf("pivot_node_id:%i\n", pivot_node_id);
-        printf("last_position:%i\n", *last_position);
 
         int tr_link_id = Node_table_[pivot_node_id].first_outlink_id;
         while (tr_link_id != -1)
         {
-            printf("tr_link_id:%i\n", tr_link_id);
             int tr_node_id = Link_table_[tr_link_id].to_node_id;
             if (Node_table_[tr_node_id].search_flag != 2)
             {
@@ -128,7 +119,6 @@ int dijkstra(Link_t *Link_table_, int *Num_Link_, Node_t *Node_table_, int *Num_
                 if (Node_table_[tr_node_id].spl > Node_table_[pivot_node_id].spl + Link_table_[tr_link_id].FFT)
                 {
                     Node_table_[tr_node_id].spl = Node_table_[pivot_node_id].spl + Link_table_[tr_link_id].FFT;
-                    printf("Add node %i\n", tr_node_id);
                     add_heap(heap_tree, last_position, Node_table_, tr_node_id);
                 }
             }
@@ -160,9 +150,6 @@ int add_heap(int *heap_tree_, int *last_position_, Node_t *Node_table_, int add_
         Node_table_[add_node_id_].heap_position = add_position;
         *last_position_ = add_position;
         
-        printf("last_posi:%i\n", *last_position_);
-        getchar();
-
         up_heap(heap_tree_, Node_table_, add_position);
     }
     else
@@ -282,7 +269,7 @@ int input_parameter_data(char *folder_path_, int *Num_Link_, int *Num_Node_)
 //--------------------------------------------
 
 // Input networks data function====================================
-int input_netwok_data(char *folder_path_, Link_t *Link_table_, int *Num_Link_, Node_t *Node_table_, int *Num_Node_)
+int input_network_data(char *folder_path_, Link_t *Link_table_, int *Num_Link_, Node_t *Node_table_, int *Num_Node_)
 {
     //Init Node_table----------------------------
     for (int i = 0; i <= *Num_Node_; ++i)

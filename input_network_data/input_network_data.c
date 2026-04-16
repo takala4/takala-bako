@@ -1,4 +1,4 @@
-//Inclue header file==============================================
+//Include header file==============================================
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -30,7 +30,7 @@ typedef struct _node
 
 //Function prottype===============================================
 int input_parameter_data(char *folder_path_, int *Num_Link_, int *Num_Node_);
-int input_netwok_data(char *folder_path_, Link_t *Link_table_, int *Num_Link_, Node_t *Node_table_, int *Num_Node_);
+int input_network_data(char *folder_path_, Link_t *Link_table_, int *Num_Link_, Node_t *Node_table_, int *Num_Node_);
 
 //main============================================================
 int main(){
@@ -47,7 +47,6 @@ int main(){
     //Input parameter data-----------------------
     input_parameter_data(folder_path, Num_Link, Num_Node);
 
-    printf("dbg1\n");
     //Construct Node_t array and Link_t array-----
     int node_table_len = *Num_Node + 1;
     int link_table_len = *Num_Link + 1;
@@ -55,9 +54,7 @@ int main(){
     Link_t *Link_table = malloc(link_table_len * sizeof(Link_t));
 
      //Input network data------------------------
-    printf("dbg2\n");
-    input_netwok_data(folder_path, Link_table, Num_Link, Node_table, Num_Node);
-    printf("dbg3\n");
+    input_network_data(folder_path, Link_table, Num_Link, Node_table, Num_Node);
 
     printf("Link:%i\n", *Num_Link);
     printf("Node:%i\n", *Num_Node);
@@ -89,7 +86,7 @@ int input_parameter_data(char *folder_path_, int *Num_Link_, int *Num_Node_)
 //--------------------------------------------
 
 // Input networks data function====================================
-int input_netwok_data(char *folder_path_, Link_t *Link_table_, int *Num_Link_, Node_t *Node_table_, int *Num_Node_)
+int input_network_data(char *folder_path_, Link_t *Link_table_, int *Num_Link_, Node_t *Node_table_, int *Num_Node_)
 {
     //Init Node_table----------------------------
     for (int i = 0; i <= *Num_Node_; ++i)

@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import math
 
 from numpy.linalg.linalg import norm
@@ -6,7 +7,7 @@ import gurobipy as gp
 
 # https://github.com/GRYE/Nesterov-accelerated-gradient-descent/blob/master/nesterov_method.py
 
-class model:
+class Model:
     def __init__(self, M, b, dir_path=False):
         
         # input file date

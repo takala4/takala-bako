@@ -5,7 +5,7 @@ import gurobipy as gp
 
 
 
-class model:
+class Model:
     def __init__(self, M, b, dir_path=False):
         
         # input file date

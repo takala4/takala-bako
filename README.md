@@ -1,22 +1,35 @@
 # takala-bako
 
-個人的によく使うコードをストックするリポジトリです．
+個人的によく使うコードをストックするリポジトリです。
 
+## プログラム一覧
 
-## プログラム
+### 数理最適化
 
-* ダイクストラ法(最短経路探索)
-* ガウス＝ザイデル法(連立一次方程式)
+| ディレクトリ | 内容 | 言語 |
+|---|---|---|
+| [LCP](LCP/) | 線形相補性問題 (Linear Complementarity Problem) ソルバー群 | Python |
+| [hitchcock](hitchcock/) | ヒッチコック輸送問題 | Python |
+| [projection](projection/) | Capped Simplex への射影 | Python |
 
-----
+### ネットワーク・交通工学
 
-# takala-bako
+| ディレクトリ | 内容 | 言語 |
+|---|---|---|
+| [dijkstra](dijkstra/) | ダイクストラ法 (優先度付きキュー使用) | C |
+| [UE](UE/) | 利用者均衡配分 (User Equilibrium) | Python |
+| [input_network_data](input_network_data/) | 道路ネットワークデータ読み込みモジュール | C |
+| [make_network_data](make_network_data/) | 格子状ネットワーク作成ツール | Python |
 
-This repository stocks versatile programs.
+### 数値計算
 
+| ディレクトリ | 内容 | 言語 |
+|---|---|---|
+| [gauss-seidel](gauss-seidel/) | ガウス＝ザイデル法 (連立一次方程式の反復解法) | C |
+| [SIR](SIR/) | SIR感染症モデルソルバー | Python |
+| [tropical](tropical/) | トロピカル線形代数 (max-plus代数) による最短経路問題 | Python |
 
-## Programs
+## ドキュメント
 
-* reading network data module
-* dijkstra
-* gausse-Seidel
+* [コーディング規約](document/coding_conventions.md)
+* [データフォーマット](document/file_format.md)

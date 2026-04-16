@@ -60,9 +60,7 @@ b_{M}
 
 ----
 
-# File format 
-
-Under constructed...
+# File format
 
 
 ## Matrix Data
@@ -71,6 +69,11 @@ Under constructed...
 ### .csv
 
 .csv file is a delimited text file that uses a comma to separate values.
+
+* Encoding: UTF-8
+* Line ending: CRLF
+* Delimiter: Comma
+* With BOM (as a rule)
 
 ```
 a_{11}, ... , a_{1M}
@@ -82,10 +85,14 @@ a_{N1}, ... , a_{NM}
 
 .dat file is a delimited text file that uses a tab to separate values.
 
+* Encoding: UTF-8
+* Line ending: CRLF
+* Delimiter: TAB
+
 ```
-a_{11}, ... , a_{1M}
-  :   ,  .  ,  :
-a_{N1}, ... , a_{NM}
+a_{11}     ...    a_{1M}
+  :         .       :
+a_{N1}     ...    a_{NM}
 ```
 
 ## Vector data

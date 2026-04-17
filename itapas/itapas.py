@@ -63,28 +63,25 @@ class ITAPAS:
             self._in_edges[pos[to]] = e
             pos[to] += 1
 
-        # PAS セグメントを numpy 配列に変換するキャッシュ
-        self._seg_arrays = {}
-
-    def _get_seg_array(self, seg):
-        """タプルを numpy 配列に変換 (キャッシュ付き)"""
-        arr = self._seg_arrays.get(seg)
-        if arr is None:
-            arr = np.array(seg, dtype=int)
-            self._seg_arrays[seg] = arr
-        return arr
+        # CSR 構造キャッシュ: data のマッピングを事前計算
+        # coo → csr 変換時のインデックス並び替えを記録
+        from scipy.sparse import coo_matrix
+        coo = coo_matrix((np.arange(E, dtype=float),
+                          (network.link_from, network.link_to)),
+                         shape=(N, N))
+        csr = coo.tocsr()
+        # csr.data には coo の data が並び替えられて入っている
+        # csr.data[k] = link_index → self._csr_data_map[k] = link_index
+        self._csr_data_map = csr.data.astype(int)
+        self._csr_indices = csr.indices.copy()
+        self._csr_indptr = csr.indptr.copy()
+        self._csr_shape = (N, N)
 
     def _build_graph(self, link_cost):
-        """コスト付き疎行列を構築 (構造キャッシュ使用)"""
-        g = self._graph_template.copy()
-        g.data[:] = np.maximum(link_cost[self._graph_template.data != 0] if False else link_cost, 1e-15)
-        # 直接 data を上書き (構造が同一なので安全)
-        # ただし csr_matrix のコンストラクタ経由で data 順序が変わりうるので再構築
-        net = self.net
-        data = np.maximum(link_cost, 1e-15)
-        g = csr_matrix((data, (net.link_from, net.link_to)),
-                        shape=(net.num_nodes, net.num_nodes))
-        return g
+        """コスト付き疎行列を構築 (構造キャッシュ使用, data のみ差し替え)"""
+        data = np.maximum(link_cost[self._csr_data_map], 1e-15)
+        return csr_matrix((data, self._csr_indices, self._csr_indptr),
+                          shape=self._csr_shape, copy=False)
 
     def _all_shortest_paths(self, link_cost):
         """全起点からの最短経路を一括計算"""
@@ -357,61 +354,80 @@ class ITAPAS:
 
     def _shift(self, pas_key, link_flow, local_flow, link_cost, link_cost_de,
                epsilon, mu, init_flag):
-        """PAS上のNewtonステップによるフローシフト (numpy 配列インデックス版)"""
-        seg1, seg2 = pas_key
-        s1 = self._get_seg_array(seg1)
-        s2 = self._get_seg_array(seg2)
+        """PAS上のNewtonステップによるフローシフト
 
-        # ボトルネックフロー
-        f1 = float(local_flow[s1].min()) if len(s1) > 0 else 0.0
-        f2 = float(local_flow[s2].min()) if len(s2) > 0 else 0.0
+        小配列 (2-10要素) に対して numpy 呼出オーバーヘッドを回避し、
+        Python ループで直接計算する。
+        """
+        seg1, seg2 = pas_key
+
+        # ボトルネックフロー・セグメントコスト・導関数を一括計算 (Python loop)
+        f1 = float('inf')
+        f2 = float('inf')
+        t1 = 0.0
+        t2 = 0.0
+        dt1 = 0.0
+        dt2 = 0.0
+        for e in seg1:
+            lf = local_flow[e]
+            if lf < f1:
+                f1 = lf
+            t1 += link_cost[e]
+            dt1 += link_cost_de[e]
+        for e in seg2:
+            lf = local_flow[e]
+            if lf < f2:
+                f2 = lf
+            t2 += link_cost[e]
+            dt2 += link_cost_de[e]
 
         if f1 < epsilon and f2 < epsilon:
             return None
-
-        # セグメントコスト
-        t1 = float(link_cost[s1].sum())
-        t2 = float(link_cost[s2].sum())
 
         if not init_flag:
             if abs(t2 - t1) < mu * (t2 + t1):
                 return None
 
-        # Newton step
-        dt1 = float(link_cost_de[s1].sum())
-        dt2 = float(link_cost_de[s2].sum())
         denom = dt1 + dt2
         if denom < 1e-20:
-            return (0.0,)
+            return 0.0  # PAS を維持
 
         delta = (t2 - t1) / denom
 
-        if delta > 0:
-            delta = min(delta, f2)
+        if delta > 0.0:
+            if delta > f2:
+                delta = f2
         else:
-            delta = max(delta, -f1)
+            if delta < -f1:
+                delta = -f1
 
         if abs(delta) < epsilon:
-            return (0.0,)
+            return 0.0  # PAS を維持
 
-        # フローシフト (numpy 一括操作)
-        link_flow[s1] += delta
-        local_flow[s1] += delta
-        link_flow[s2] -= delta
-        local_flow[s2] -= delta
-
-        # 影響リンクのコスト更新
-        affected = np.union1d(s1, s2)
+        # フローシフト + コスト更新 (Python loop, 関数呼出を最小化)
         net = self.net
-        fa = np.maximum(link_flow[affected], 0.0)
-        link_cost[affected] = self.cost_func(
-            fa, net.link_fftt[affected], net.link_capacity[affected],
-            net.link_alpha[affected], net.link_beta[affected])
-        link_cost_de[affected] = self.cost_deriv(
-            fa, net.link_fftt[affected], net.link_capacity[affected],
-            net.link_alpha[affected], net.link_beta[affected])
+        fftt = net.link_fftt
+        cap = net.link_capacity
+        alpha = net.link_alpha
+        beta = net.link_beta
+        for e in seg1:
+            link_flow[e] += delta
+            local_flow[e] += delta
+            f = link_flow[e] if link_flow[e] > 0.0 else 0.0
+            ratio = f / cap[e]
+            ratio_b = ratio ** beta[e]
+            link_cost[e] = fftt[e] * (1.0 + alpha[e] * ratio_b)
+            link_cost_de[e] = fftt[e] * alpha[e] * beta[e] * ratio_b / f if f > 1e-20 else 0.0
+        for e in seg2:
+            link_flow[e] -= delta
+            local_flow[e] -= delta
+            f = link_flow[e] if link_flow[e] > 0.0 else 0.0
+            ratio = f / cap[e]
+            ratio_b = ratio ** beta[e]
+            link_cost[e] = fftt[e] * (1.0 + alpha[e] * ratio_b)
+            link_cost_de[e] = fftt[e] * alpha[e] * beta[e] * ratio_b / f if f > 1e-20 else 0.0
 
-        return (delta,)
+        return delta
 
     def _compute_duality_gap_from_sp(self, link_flow, link_cost, sp_data):
         """事前計算済み最短経路データから双対ギャップを計算"""

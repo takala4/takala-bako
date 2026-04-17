@@ -142,10 +142,10 @@ class ITAPAS:
         if rel_gap < gap_threshold:
             return link_flow, log
 
-        # PASセット: {(seg1, seg2): origin}
-        pas_set = {}
+        # PASセット: {(seg1, seg2): set of origins}
+        # 各PASに関与する全起点を登録し、内部ループで全起点をシフト
+        pas_origins = {}
 
-        # ポテンシャルリンク検出用ベクトル
         link_from = net.link_from
         link_to = net.link_to
 
@@ -176,7 +176,6 @@ class ITAPAS:
                 if len(pot_indices) == 0:
                     continue
 
-                # 縮約コスト降順ソート
                 pot_rc = rc[pot_indices]
                 order = np.argsort(-pot_rc)
                 pot_indices = pot_indices[order]
@@ -192,8 +191,12 @@ class ITAPAS:
 
                     seg1, seg2 = pas
                     key = (seg1, seg2)
-                    pas_set[key] = r
-                    new_pas_count += 1
+
+                    if key not in pas_origins:
+                        pas_origins[key] = set()
+                        new_pas_count += 1
+
+                    pas_origins[key].add(r)
 
                     # 即座にフローシフト
                     self._shift(key, link_flow, local_flow,
@@ -201,27 +204,76 @@ class ITAPAS:
                                 init_flag=True)
 
             # ランダムサブセットに追加シフト
-            pas_keys = list(pas_set.keys())
+            pas_keys = list(pas_origins.keys())
             if len(pas_keys) > 100:
                 pas_keys = random.sample(pas_keys, 100)
             for key in pas_keys:
-                r = pas_set[key]
-                self._shift(key, link_flow, link_flow_by_origin[r],
-                            link_cost, link_cost_de, epsilon, mu,
-                            init_flag=True)
+                for r in pas_origins[key]:
+                    self._shift(key, link_flow, link_flow_by_origin[r],
+                                link_cost, link_cost_de, epsilon, mu,
+                                init_flag=True)
 
-            # --- Step 2: フローシフトフェーズ (単一起点, 原著準拠) ---
+            # --- Step 2: フローシフト (全登録起点) ---
             for _ in range(inner_iterations):
                 to_remove = []
-                for key in list(pas_set.keys()):
-                    r = pas_set[key]
-                    result = self._shift(key, link_flow, link_flow_by_origin[r],
-                                         link_cost, link_cost_de, epsilon, mu,
-                                         init_flag=False)
-                    if result is None:
+                for key in list(pas_origins.keys()):
+                    any_active = False
+                    for r in pas_origins[key]:
+                        result = self._shift(key, link_flow, link_flow_by_origin[r],
+                                             link_cost, link_cost_de, epsilon, mu,
+                                             init_flag=False)
+                        if result is not None:
+                            any_active = True
+                    if not any_active:
                         to_remove.append(key)
                 for key in to_remove:
-                    pas_set.pop(key, None)
+                    pas_origins.pop(key, None)
+
+            # --- Step 2.5: 起点ベース再配分 (Column Generation) ---
+            # 各起点のフローを現在の最短経路方向に移動させる
+            link_cost = self._compute_cost(link_flow)
+            sp_data = self._all_shortest_paths(link_cost)
+            for r in net.origins:
+                dist, pred = sp_data[r]
+                local_flow = link_flow_by_origin[r]
+                dests, vols = self._demand_by_origin[r]
+
+                # AON配分
+                aon = np.zeros(E)
+                for idx in range(len(dests)):
+                    d, vol = int(dests[idx]), vols[idx]
+                    node = d
+                    while node != r:
+                        p = pred[node]
+                        if p < 0:
+                            break
+                        e = self._link_index_cache.get((p, node))
+                        if e is not None:
+                            aon[e] += vol
+                        node = p
+
+                direction = aon - local_flow
+                if np.all(np.abs(direction) < 1e-10):
+                    continue
+
+                # 二分法ステップサイズ探索
+                lo, hi = 0.0, 1.0
+                for _ in range(20):
+                    mid = (lo + hi) / 2.0
+                    trial = link_flow + mid * direction
+                    tc = self._compute_cost(trial)
+                    if float(np.dot(tc, direction)) < 0:
+                        lo = mid
+                    else:
+                        hi = mid
+                lam = (lo + hi) / 2.0
+
+                # 起点別FWなのでステップサイズを抑制 (全起点が同時に動くため)
+                lam = lam * 0.5
+                if lam > 1e-10:
+                    step = lam * direction
+                    link_flow += step
+                    link_flow_by_origin[r] = local_flow + step
 
             # --- Step 3: 収束判定 ---
             link_cost = self._compute_cost(link_flow)
@@ -233,11 +285,11 @@ class ITAPAS:
 
             elapsed = time.time() - start_time
             log.append({'iter': iteration, 'gap': gap, 'rel_gap': rel_gap,
-                        'time': elapsed, 'num_pas': len(pas_set)})
+                        'time': elapsed, 'num_pas': len(pas_origins)})
 
             if verbose:
                 print(f"Iter {iteration:3d}: rel_gap={rel_gap:.6e}, "
-                      f"gap={gap:.2f}, PAS={len(pas_set)}, "
+                      f"gap={gap:.2f}, PAS={len(pas_origins)}, "
                       f"new={new_pas_count}, time={elapsed:.2f}s")
 
             if rel_gap < gap_threshold:

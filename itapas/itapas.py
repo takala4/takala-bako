@@ -25,28 +25,75 @@ class ITAPAS:
         self.cost_integral = cost_integral
 
         E = network.num_links
+        N = network.num_nodes
+
+        # リンクインデックス検索キャッシュ
         self._link_index_cache = {}
         for e in range(E):
             self._link_index_cache[(network.link_from[e], network.link_to[e])] = e
 
-        # 疎行列の構造をキャッシュ (data だけ差し替えて再利用)
-        N = network.num_nodes
-        self._graph_row = network.link_from
-        self._graph_col = network.link_to
-        self._graph_shape = (N, N)
+        # CSR構造の事前構築 (data だけ差し替えて再利用)
+        dummy = np.ones(E)
+        self._graph_template = csr_matrix(
+            (dummy, (network.link_from, network.link_to)), shape=(N, N)
+        )
 
         # 起点別需要の事前グループ化
         self._demand_by_origin = {}
         for r in network.origins:
-            self._demand_by_origin[r] = [
-                (d, vol) for (o, d), vol in network.demand.items() if o == r
-            ]
+            dests, vols = [], []
+            for (o, d), vol in network.demand.items():
+                if o == r:
+                    dests.append(d)
+                    vols.append(vol)
+            self._demand_by_origin[r] = (np.array(dests, dtype=int),
+                                          np.array(vols, dtype=float))
+
+        # 入リンクを numpy 配列化 (MFS高速化)
+        # in_link_ptr[node] ~ in_link_ptr[node+1] が node への入リンク範囲
+        in_counts = np.zeros(N, dtype=int)
+        for e in range(E):
+            in_counts[network.link_to[e]] += 1
+        self._in_ptr = np.zeros(N + 1, dtype=int)
+        np.cumsum(in_counts, out=self._in_ptr[1:])
+        self._in_edges = np.empty(E, dtype=int)
+        pos = self._in_ptr[:-1].copy()
+        for e in range(E):
+            to = network.link_to[e]
+            self._in_edges[pos[to]] = e
+            pos[to] += 1
+
+        # PAS セグメントを numpy 配列に変換するキャッシュ
+        self._seg_arrays = {}
+
+    def _get_seg_array(self, seg):
+        """タプルを numpy 配列に変換 (キャッシュ付き)"""
+        arr = self._seg_arrays.get(seg)
+        if arr is None:
+            arr = np.array(seg, dtype=int)
+            self._seg_arrays[seg] = arr
+        return arr
 
     def _build_graph(self, link_cost):
         """コスト付き疎行列を構築 (構造キャッシュ使用)"""
+        g = self._graph_template.copy()
+        g.data[:] = np.maximum(link_cost[self._graph_template.data != 0] if False else link_cost, 1e-15)
+        # 直接 data を上書き (構造が同一なので安全)
+        # ただし csr_matrix のコンストラクタ経由で data 順序が変わりうるので再構築
+        net = self.net
         data = np.maximum(link_cost, 1e-15)
-        return csr_matrix((data, (self._graph_row, self._graph_col)),
-                          shape=self._graph_shape)
+        g = csr_matrix((data, (net.link_from, net.link_to)),
+                        shape=(net.num_nodes, net.num_nodes))
+        return g
+
+    def _all_shortest_paths(self, link_cost):
+        """全起点からの最短経路を一括計算"""
+        g = self._build_graph(link_cost)
+        origins = np.array(self.net.origins, dtype=int)
+        dist, pred = sp_dijkstra(g, directed=True, indices=origins,
+                                  return_predecessors=True)
+        # dist[i] = origin_list[i] からの距離, pred[i] = predecessor
+        return {r: (dist[i], pred[i]) for i, r in enumerate(origins)}
 
     def solve(self, max_iter=50, gap_threshold=1e-6, time_limit=1200,
               epsilon=1e-14, theta=1e-14, mu=1e-3,
@@ -61,11 +108,14 @@ class ITAPAS:
         link_flow_by_origin = {}
 
         link_cost = self._compute_cost(link_flow)
+        sp_data = self._all_shortest_paths(link_cost)
 
         for r in net.origins:
-            dist, pred = self._shortest_path(link_cost, r)
+            dist, pred = sp_data[r]
             local_flow = np.zeros(E)
-            for d, vol in self._demand_by_origin[r]:
+            dests, vols = self._demand_by_origin[r]
+            for idx in range(len(dests)):
+                d, vol = int(dests[idx]), vols[idx]
                 node = d
                 while node != r:
                     p = pred[node]
@@ -81,8 +131,9 @@ class ITAPAS:
         link_cost = self._compute_cost(link_flow)
         link_cost_de = self._compute_cost_deriv(link_flow)
 
-        total_cost = np.sum(link_flow * link_cost)
-        gap = self._compute_duality_gap(link_flow, link_cost)
+        total_cost = float(np.dot(link_flow, link_cost))
+        sp_data = self._all_shortest_paths(link_cost)
+        gap = self._compute_duality_gap_from_sp(link_flow, link_cost, sp_data)
         rel_gap = gap / total_cost if total_cost > 0 else float('inf')
 
         log = [{'iter': 0, 'gap': gap, 'rel_gap': rel_gap,
@@ -97,6 +148,10 @@ class ITAPAS:
         # PASセット: {(seg1, seg2): origin}
         pas_set = {}
 
+        # ポテンシャルリンク検出用ベクトル
+        link_from = net.link_from
+        link_to = net.link_to
+
         # === メインループ ===
         for iteration in range(1, max_iter + 1):
             if time.time() - start_time > time_limit:
@@ -107,37 +162,39 @@ class ITAPAS:
             # --- Step 1: PAS識別 + 即座のフローシフト ---
             cs = max(rel_gap, 1e-10)
             new_pas_count = 0
+            eps_cs = epsilon * cs
+            theta_cs = theta * cs
+
+            sp_data = self._all_shortest_paths(link_cost)
 
             for r in net.origins:
-                dist, pred = self._shortest_path(link_cost, r)
+                dist, pred = sp_data[r]
                 local_flow = link_flow_by_origin[r]
 
-                # ポテンシャルリンク (縮約コスト降順)
-                potential = []
-                eps_cs = epsilon * cs
-                theta_cs = theta * cs
-                for e in range(E):
-                    if local_flow[e] <= eps_cs:
-                        continue
-                    rc = dist[net.link_from[e]] - dist[net.link_to[e]] + link_cost[e]
-                    if rc > theta_cs:
-                        potential.append((rc, e))
+                # ベクトル化: ポテンシャルリンク検出
+                rc = dist[link_from] - dist[link_to] + link_cost
+                mask = (local_flow > eps_cs) & (rc > theta_cs)
+                pot_indices = np.where(mask)[0]
 
-                potential.sort(reverse=True)
+                if len(pot_indices) == 0:
+                    continue
 
-                for _, e0 in potential:
+                # 縮約コスト降順ソート
+                pot_rc = rc[pot_indices]
+                order = np.argsort(-pot_rc)
+                pot_indices = pot_indices[order]
+
+                for e0 in pot_indices:
                     if local_flow[e0] <= eps_cs:
                         continue
 
-                    pas = self._mfs(r, e0, local_flow, dist, pred,
+                    pas = self._mfs(r, int(e0), local_flow, dist, pred,
                                     epsilon, link_flow)
                     if pas is None:
                         continue
 
                     seg1, seg2 = pas
                     key = (seg1, seg2)
-
-                    # PAS登録 (既存なら起点を更新)
                     pas_set[key] = r
                     new_pas_count += 1
 
@@ -172,8 +229,9 @@ class ITAPAS:
             # --- Step 3: 収束判定 ---
             link_cost = self._compute_cost(link_flow)
             link_cost_de = self._compute_cost_deriv(link_flow)
-            total_cost = np.sum(link_flow * link_cost)
-            gap = self._compute_duality_gap(link_flow, link_cost)
+            total_cost = float(np.dot(link_flow, link_cost))
+            sp_data = self._all_shortest_paths(link_cost)
+            gap = self._compute_duality_gap_from_sp(link_flow, link_cost, sp_data)
             rel_gap = gap / total_cost if total_cost > 0 else float('inf')
 
             elapsed = time.time() - start_time
@@ -203,13 +261,10 @@ class ITAPAS:
                                net.link_alpha, net.link_beta)
 
     def _shortest_path(self, link_cost, origin):
-        graph = self._build_graph(link_cost)
-        dist, pred = sp_dijkstra(graph, directed=True, indices=origin,
+        g = self._build_graph(link_cost)
+        dist, pred = sp_dijkstra(g, directed=True, indices=origin,
                                   return_predecessors=True)
         return dist, pred
-
-    def _find_link(self, from_node, to_node):
-        return self._link_index_cache.get((from_node, to_node))
 
     def _get_spt_path(self, pred, origin, target):
         """SPT上のorigin→targetの経路をリンクインデックスのタプルで返す"""
@@ -242,18 +297,27 @@ class ITAPAS:
         if node == origin:
             spt_nodes.add(origin)
 
-        # 逆方向トレース
+        # 逆方向トレース (配列ベースの入リンク参照)
         visited = {i: 0}
         backward = [e0]
         current = i
+        in_ptr = self._in_ptr
+        in_edges = self._in_edges
 
         for _ in range(net.num_nodes * 2):
-            # current への最大フロー入リンク
+            # current への最大フロー入リンク (配列参照)
+            start = in_ptr[current]
+            end = in_ptr[current + 1]
+            if start == end:
+                return None
+
             best_e = -1
             best_f = -1.0
-            for e in net.in_links.get(current, []):
-                if local_flow[e] > best_f:
-                    best_f = local_flow[e]
+            for idx in range(start, end):
+                e = in_edges[idx]
+                f = local_flow[e]
+                if f > best_f:
+                    best_f = f
                     best_e = e
 
             if best_e < 0 or best_f < epsilon:
@@ -270,7 +334,6 @@ class ITAPAS:
                 return (seg1, seg2)
 
             if prev in visited:
-                # サイクル除去
                 cpos = visited[prev]
                 cycle = list(backward[cpos + 1:]) + [best_e]
                 if cycle:
@@ -294,24 +357,29 @@ class ITAPAS:
 
     def _shift(self, pas_key, link_flow, local_flow, link_cost, link_cost_de,
                epsilon, mu, init_flag):
-        """PAS上のNewtonステップによるフローシフト"""
+        """PAS上のNewtonステップによるフローシフト (numpy 配列インデックス版)"""
         seg1, seg2 = pas_key
+        s1 = self._get_seg_array(seg1)
+        s2 = self._get_seg_array(seg2)
 
-        f1 = min((local_flow[e] for e in seg1), default=0.0)
-        f2 = min((local_flow[e] for e in seg2), default=0.0)
+        # ボトルネックフロー
+        f1 = float(local_flow[s1].min()) if len(s1) > 0 else 0.0
+        f2 = float(local_flow[s2].min()) if len(s2) > 0 else 0.0
 
         if f1 < epsilon and f2 < epsilon:
             return None
 
-        t1 = sum(link_cost[e] for e in seg1)
-        t2 = sum(link_cost[e] for e in seg2)
+        # セグメントコスト
+        t1 = float(link_cost[s1].sum())
+        t2 = float(link_cost[s2].sum())
 
         if not init_flag:
             if abs(t2 - t1) < mu * (t2 + t1):
                 return None
 
-        dt1 = sum(link_cost_de[e] for e in seg1)
-        dt2 = sum(link_cost_de[e] for e in seg2)
+        # Newton step
+        dt1 = float(link_cost_de[s1].sum())
+        dt2 = float(link_cost_de[s2].sum())
         denom = dt1 + dt2
         if denom < 1e-20:
             return (0.0,)
@@ -326,32 +394,36 @@ class ITAPAS:
         if abs(delta) < epsilon:
             return (0.0,)
 
-        for e in seg1:
-            link_flow[e] += delta
-            local_flow[e] += delta
-        for e in seg2:
-            link_flow[e] -= delta
-            local_flow[e] -= delta
+        # フローシフト (numpy 一括操作)
+        link_flow[s1] += delta
+        local_flow[s1] += delta
+        link_flow[s2] -= delta
+        local_flow[s2] -= delta
 
+        # 影響リンクのコスト更新
+        affected = np.union1d(s1, s2)
         net = self.net
-        for e in set(seg1) | set(seg2):
-            f = max(link_flow[e], 0.0)
-            link_cost[e] = self.cost_func(
-                f, net.link_fftt[e], net.link_capacity[e],
-                net.link_alpha[e], net.link_beta[e])
-            link_cost_de[e] = self.cost_deriv(
-                f, net.link_fftt[e], net.link_capacity[e],
-                net.link_alpha[e], net.link_beta[e])
+        fa = np.maximum(link_flow[affected], 0.0)
+        link_cost[affected] = self.cost_func(
+            fa, net.link_fftt[affected], net.link_capacity[affected],
+            net.link_alpha[affected], net.link_beta[affected])
+        link_cost_de[affected] = self.cost_deriv(
+            fa, net.link_fftt[affected], net.link_capacity[affected],
+            net.link_alpha[affected], net.link_beta[affected])
 
         return (delta,)
 
+    def _compute_duality_gap_from_sp(self, link_flow, link_cost, sp_data):
+        """事前計算済み最短経路データから双対ギャップを計算"""
+        total_tt = float(np.dot(link_flow, link_cost))
+        sp_tt = 0.0
+        for r in self.net.origins:
+            dist, _ = sp_data[r]
+            dests, vols = self._demand_by_origin[r]
+            sp_tt += float(np.dot(vols, dist[dests]))
+        return total_tt - sp_tt
+
     def _compute_duality_gap(self, link_flow, link_cost):
         """双対ギャップ = Σ(flow*cost) - Σ(demand*shortest_path_cost)"""
-        net = self.net
-        total_tt = np.sum(link_flow * link_cost)
-        sp_tt = 0.0
-        for r in net.origins:
-            dist, _ = self._shortest_path(link_cost, r)
-            for d, vol in self._demand_by_origin[r]:
-                sp_tt += vol * dist[d]
-        return total_tt - sp_tt
+        sp_data = self._all_shortest_paths(link_cost)
+        return self._compute_duality_gap_from_sp(link_flow, link_cost, sp_data)

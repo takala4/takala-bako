@@ -19,7 +19,6 @@
 | [dijkstra](dijkstra/) | ダイクストラ法 (優先度付きキュー使用) | C |
 | [frank-wolfe](frank-wolfe/) | Frank-Wolfe 法による利用者均衡配分 | Python |
 | [itapas](itapas/) | iTAPAS 利用者均衡配分 (Xie & Xie, 2016) | Python |
-| [UE](UE/) | 利用者均衡配分 (User Equilibrium) | Python |
 | [input_network_data](input_network_data/) | 道路ネットワークデータ読み込みモジュール | C |
 | [make_network_data](make_network_data/) | 格子状ネットワーク作成ツール | Python |
 

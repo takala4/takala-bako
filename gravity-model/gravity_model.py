@@ -1,24 +1,27 @@
 """重力モデルによるOD需要推計とパラメータ推定
 
-重力モデル:
-    T_ij = O_i * D_j * f(c_ij) / Σ_j D_j * f(c_ij)   (生成量制約)
-    T_ij = a_i * b_j * O_i * D_j * f(c_ij)             (二重制約)
+交通工学における古典的な重力モデルのキャリブレーション。
+観測トリップ長分布 (TLFD) または平均トリップコストに合致するよう
+抵抗関数のパラメータを推定する。
 
-抵抗関数 f(c):
-    指数型:  f(c) = exp(-β * c)
-    べき乗型: f(c) = c^(-γ)
+重力モデル (二重制約):
+    T_ij = a_i * b_j * O_i * D_j * f(c_ij)
+    a_i, b_j は行和・列和制約を満たすバランシング係数 (Furness法)
 
-パラメータ推定:
-    最尤推定 (Poisson回帰) または最小二乗法
+推定手法:
+    Hyman法: 平均トリップコストの一致による逐次更新
+    TLFD法:  トリップ長頻度分布の適合 (最小二乗 or カイ二乗)
 
 References:
+    Hyman, G. M. (1969). The calibration of trip distribution models.
+        Environment and Planning, 1, 105-112.
     Ortúzar, J. de D. & Willumsen, L. G. (2011).
         Modelling Transport (4th ed.). Wiley.
     Wilson, A. G. (1970). Entropy in Urban and Regional Modelling. Pion.
 """
 
 import numpy as np
-from scipy.optimize import minimize_scalar, minimize
+from scipy.optimize import minimize_scalar
 
 
 def impedance_exp(cost, beta):
@@ -28,27 +31,34 @@ def impedance_exp(cost, beta):
 
 def impedance_power(cost, gamma):
     """べき乗型抵抗関数: f(c) = c^(-γ)"""
-    return np.where(cost > 0, cost ** (-gamma), 0.0)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        return np.where(cost > 0, cost ** (-gamma), 0.0)
+
+
+def impedance_combined(cost, beta, gamma):
+    """複合型抵抗関数: f(c) = c^(-γ) * exp(-β * c)"""
+    with np.errstate(divide='ignore', invalid='ignore'):
+        return np.where(cost > 0, cost ** (-gamma) * np.exp(-beta * cost), 0.0)
 
 
 class GravityModel:
-    """重力モデル
+    """交通工学における重力モデル
 
     Parameters
     ----------
-    origins : array-like (n_zones,)
-        生成交通量 O_i
-    destinations : array-like (n_zones,)
-        集中交通量 D_j
+    O : array-like (n_zones,)
+        生成交通量
+    D : array-like (n_zones,)
+        集中交通量
     cost_matrix : array-like (n_zones, n_zones)
-        ゾーン間のコスト行列 c_ij
-    impedance : str
-        抵抗関数の種類 ('exp' or 'power')
+        ゾーン間コスト行列 (時間, 距離等)
+    impedance : str or callable
+        抵抗関数 ('exp', 'power', 'combined', or callable)
     """
 
-    def __init__(self, origins, destinations, cost_matrix, impedance='exp'):
-        self.O = np.asarray(origins, dtype=float)
-        self.D = np.asarray(destinations, dtype=float)
+    def __init__(self, O, D, cost_matrix, impedance='exp'):
+        self.O = np.asarray(O, dtype=float)
+        self.D = np.asarray(D, dtype=float)
         self.cost = np.asarray(cost_matrix, dtype=float)
         self.n_zones = len(self.O)
 
@@ -56,199 +66,240 @@ class GravityModel:
             self.impedance_func = impedance_exp
         elif impedance == 'power':
             self.impedance_func = impedance_power
+        elif impedance == 'combined':
+            self.impedance_func = impedance_combined
+        elif callable(impedance):
+            self.impedance_func = impedance
         else:
             raise ValueError(f"Unknown impedance type: {impedance}")
         self.impedance_type = impedance
 
-    def predict_singly_constrained(self, param):
-        """生成量制約モデルによるOD行列の推計
+    def furness(self, F, max_iter=100, tol=1e-6):
+        """Furness法 (二重制約バランシング)
 
         Parameters
         ----------
-        param : float
-            抵抗関数のパラメータ (β or γ)
+        F : ndarray (n_zones, n_zones)
+            抵抗関数値の行列 (対角要素は0)
 
         Returns
         -------
         T : ndarray (n_zones, n_zones)
-            推計OD行列
+            バランシング済みOD行列
         """
-        F = self.impedance_func(self.cost, param)
-        # 対角要素 (ゾーン内) を除外
-        np.fill_diagonal(F, 0.0)
-
-        denom = F @ self.D  # Σ_j D_j * f(c_ij)
-        denom = np.where(denom > 0, denom, 1e-20)
-
-        T = np.outer(self.O, self.D) * F / denom[:, None]
-        return T
-
-    def predict_doubly_constrained(self, param, max_iter=100, tol=1e-6):
-        """二重制約モデル (Furness法) によるOD行列の推計
-
-        Parameters
-        ----------
-        param : float
-            抵抗関数のパラメータ
-        max_iter : int
-            バランシングの最大イテレーション数
-        tol : float
-            収束判定閾値
-
-        Returns
-        -------
-        T : ndarray (n_zones, n_zones)
-            推計OD行列
-        """
-        F = self.impedance_func(self.cost, param)
-        np.fill_diagonal(F, 0.0)
-
-        a = np.ones(self.n_zones)
-        b = np.ones(self.n_zones)
-
+        T = np.outer(self.O, self.D) * F
         for _ in range(max_iter):
-            # b_j = D_j / Σ_i a_i * O_i * f(c_ij)
-            col_sum = (a * self.O) @ F
-            b = np.where(col_sum > 0, self.D / col_sum, 0.0)
+            # 行和制約
+            row_sum = T.sum(axis=1)
+            row_factor = np.where(row_sum > 0, self.O / row_sum, 0.0)
+            T = T * row_factor[:, None]
 
-            # a_i = O_i / Σ_j b_j * D_j * f(c_ij)
-            # 実際には a_i = 1 / Σ_j b_j * D_j * f(c_ij) (O_i は外で掛ける)
-            row_sum = F @ (b * self.D)
-            a_new = np.where(row_sum > 0, 1.0 / row_sum, 0.0)
+            # 列和制約
+            col_sum = T.sum(axis=0)
+            col_factor = np.where(col_sum > 0, self.D / col_sum, 0.0)
+            T = T * col_factor[None, :]
 
-            if np.max(np.abs(a_new - a)) < tol:
-                a = a_new
+            # 収束判定
+            row_err = np.max(np.abs(T.sum(axis=1) - self.O))
+            col_err = np.max(np.abs(T.sum(axis=0) - self.D))
+            if row_err < tol and col_err < tol:
                 break
-            a = a_new
 
-        T = np.outer(a * self.O, b * self.D) * F
         return T
 
-    def estimate(self, observed, constraint='doubly', method='mle',
-                 param_range=(0.01, 5.0)):
-        """観測OD行列からパラメータを推定
+    def predict(self, param):
+        """パラメータを指定してOD行列を推計 (二重制約)
 
         Parameters
         ----------
-        observed : array-like (n_zones, n_zones)
-            観測OD行列
-        constraint : str
-            制約の種類 ('singly' or 'doubly')
-        method : str
-            推定手法 ('mle' or 'lsq')
-        param_range : tuple
-            パラメータの探索範囲
+        param : float or tuple
+            抵抗関数のパラメータ
+
+        Returns
+        -------
+        T : ndarray (n_zones, n_zones)
+        """
+        if isinstance(param, (list, tuple, np.ndarray)):
+            F = self.impedance_func(self.cost, *param)
+        else:
+            F = self.impedance_func(self.cost, param)
+        np.fill_diagonal(F, 0.0)
+        return self.furness(F)
+
+    def mean_trip_cost(self, T):
+        """OD行列の平均トリップコスト"""
+        total = T.sum()
+        if total > 0:
+            return np.sum(T * self.cost) / total
+        return 0.0
+
+    def trip_length_distribution(self, T, bins):
+        """OD行列のトリップ長頻度分布 (TLFD)
+
+        Parameters
+        ----------
+        T : ndarray (n_zones, n_zones)
+            OD行列
+        bins : array-like
+            コストのビン境界
+
+        Returns
+        -------
+        freq : ndarray (len(bins)-1,)
+            各ビンのトリップ数
+        """
+        mask = np.ones_like(T, dtype=bool)
+        np.fill_diagonal(mask, False)
+        costs_flat = self.cost[mask]
+        trips_flat = T[mask]
+        freq, _ = np.histogram(costs_flat, bins=bins, weights=trips_flat)
+        return freq
+
+    def calibrate_hyman(self, observed_mean_cost, param0=None,
+                        max_iter=50, tol=1e-4, verbose=False):
+        """Hyman法によるパラメータ推定
+
+        観測平均トリップコストに一致するようパラメータを逐次更新する。
+
+        β_{k+1} = β_k * c̄_obs / c̄_model(β_k)
+
+        Parameters
+        ----------
+        observed_mean_cost : float
+            観測平均トリップコスト
+        param0 : float, optional
+            初期パラメータ値
+        max_iter : int
+            最大イテレーション数
+        tol : float
+            収束判定閾値 (相対誤差)
+        verbose : bool
+            進捗表示
 
         Returns
         -------
         result : dict
-            推定結果 {'param': float, 'objective': float, 'predicted': ndarray}
         """
-        T_obs = np.asarray(observed, dtype=float)
-        mask = T_obs > 0  # 正の需要がある OD ペアのみ
+        c_obs = observed_mean_cost
 
-        if constraint == 'singly':
-            predict_func = self.predict_singly_constrained
-        else:
-            predict_func = self.predict_doubly_constrained
+        if param0 is None:
+            param0 = 1.0 / c_obs
 
-        if method == 'mle':
-            # Poisson 最尤推定: max Σ T_obs * log(T_pred) - T_pred
-            def neg_loglik(param):
-                T_pred = predict_func(param)
-                T_pred = np.maximum(T_pred, 1e-20)
-                ll = np.sum(T_obs[mask] * np.log(T_pred[mask]) - T_pred[mask])
-                return -ll
+        param = param0
+        history = []
 
-            res = minimize_scalar(neg_loglik, bounds=param_range, method='bounded')
-            best_param = res.x
-            best_obj = -res.fun
+        for i in range(max_iter):
+            T = self.predict(param)
+            c_model = self.mean_trip_cost(T)
 
-        elif method == 'lsq':
-            # 最小二乗法: min Σ (T_obs - T_pred)^2
-            def sse(param):
-                T_pred = predict_func(param)
-                return np.sum((T_obs - T_pred) ** 2)
+            rel_err = abs(c_model - c_obs) / c_obs if c_obs > 0 else float('inf')
+            history.append({'iter': i, 'param': param,
+                            'mean_cost_model': c_model, 'rel_error': rel_err})
 
-            res = minimize_scalar(sse, bounds=param_range, method='bounded')
-            best_param = res.x
-            best_obj = res.fun
+            if verbose:
+                print(f"Iter {i:3d}: param={param:.6f}, "
+                      f"c_model={c_model:.4f}, c_obs={c_obs:.4f}, "
+                      f"rel_err={rel_err:.6f}")
+
+            if rel_err < tol:
+                break
+
+            # Hyman 更新: c_model > c_obs → β が小さすぎ → 増加
+            if c_model > 0:
+                param = param * c_model / c_obs
+
+        T_final = self.predict(param)
+        return {
+            'param': param,
+            'predicted': T_final,
+            'mean_cost_model': self.mean_trip_cost(T_final),
+            'mean_cost_observed': c_obs,
+            'rel_error': rel_err,
+            'history': history,
+        }
+
+    def calibrate_tlfd(self, observed_tlfd, bins, param_range=(0.001, 5.0),
+                       method='chi2'):
+        """トリップ長頻度分布 (TLFD) への適合によるパラメータ推定
+
+        Parameters
+        ----------
+        observed_tlfd : array-like (len(bins)-1,)
+            観測トリップ長頻度分布
+        bins : array-like
+            コストのビン境界
+        param_range : tuple
+            パラメータ探索範囲
+        method : str
+            適合度指標 ('chi2', 'rmse', 'rmsn')
+
+        Returns
+        -------
+        result : dict
+        """
+        obs = np.asarray(observed_tlfd, dtype=float)
+        obs_total = obs.sum()
+
+        if method == 'chi2':
+            # カイ二乗統計量
+            def objective(param):
+                T = self.predict(param)
+                pred = self.trip_length_distribution(T, bins)
+                # 正規化して比較
+                pred_norm = pred / pred.sum() * obs_total if pred.sum() > 0 else pred
+                safe = np.maximum(pred_norm, 1e-10)
+                chi2 = np.sum((obs - pred_norm) ** 2 / safe)
+                return chi2
+
+        elif method == 'rmse':
+            # RMSE
+            def objective(param):
+                T = self.predict(param)
+                pred = self.trip_length_distribution(T, bins)
+                pred_norm = pred / pred.sum() * obs_total if pred.sum() > 0 else pred
+                return np.sqrt(np.mean((obs - pred_norm) ** 2))
+
+        elif method == 'rmsn':
+            # 正規化RMSE (比率で比較)
+            def objective(param):
+                T = self.predict(param)
+                pred = self.trip_length_distribution(T, bins)
+                obs_prop = obs / obs_total if obs_total > 0 else obs
+                pred_prop = pred / pred.sum() if pred.sum() > 0 else pred
+                return np.sqrt(np.mean((obs_prop - pred_prop) ** 2))
 
         else:
             raise ValueError(f"Unknown method: {method}")
 
-        T_pred = predict_func(best_param)
+        res = minimize_scalar(objective, bounds=param_range, method='bounded')
+        best_param = res.x
 
-        # 適合度指標
-        rmse = np.sqrt(np.mean((T_obs - T_pred) ** 2))
-        r_squared = 1.0 - np.sum((T_obs - T_pred) ** 2) / np.sum((T_obs - T_obs.mean()) ** 2)
-        total_obs = T_obs.sum()
-        total_pred = T_pred.sum()
+        T_final = self.predict(best_param)
+        pred_tlfd = self.trip_length_distribution(T_final, bins)
 
         return {
             'param': best_param,
-            'objective': best_obj,
-            'predicted': T_pred,
-            'rmse': rmse,
-            'r_squared': r_squared,
-            'total_observed': total_obs,
-            'total_predicted': total_pred,
-        }
-
-    def estimate_multivariate(self, observed, impedance_func_custom,
-                               param0, constraint='doubly', method='mle'):
-        """複数パラメータの抵抗関数に対する推定
-
-        Parameters
-        ----------
-        observed : array-like
-            観測OD行列
-        impedance_func_custom : callable
-            f(cost, *params) → ndarray のカスタム抵抗関数
-        param0 : array-like
-            パラメータ初期値
-        constraint : str
-        method : str
-
-        Returns
-        -------
-        result : dict
-        """
-        T_obs = np.asarray(observed, dtype=float)
-        mask = T_obs > 0
-        original_func = self.impedance_func
-
-        def predict(params):
-            self.impedance_func = lambda c, p=None: impedance_func_custom(c, *params)
-            if constraint == 'singly':
-                T = self.predict_singly_constrained(0)  # param は impedance_func 内で使用
-            else:
-                T = self.predict_doubly_constrained(0)
-            return T
-
-        if method == 'mle':
-            def neg_loglik(params):
-                T_pred = predict(params)
-                T_pred = np.maximum(T_pred, 1e-20)
-                return -np.sum(T_obs[mask] * np.log(T_pred[mask]) - T_pred[mask])
-            res = minimize(neg_loglik, param0, method='Nelder-Mead')
-        else:
-            def sse(params):
-                T_pred = predict(params)
-                return np.sum((T_obs - T_pred) ** 2)
-            res = minimize(sse, param0, method='Nelder-Mead')
-
-        best_params = res.x
-        T_pred = predict(best_params)
-        self.impedance_func = original_func
-
-        rmse = np.sqrt(np.mean((T_obs - T_pred) ** 2))
-        r_squared = 1.0 - np.sum((T_obs - T_pred) ** 2) / np.sum((T_obs - T_obs.mean()) ** 2)
-
-        return {
-            'params': best_params,
+            'predicted': T_final,
+            'predicted_tlfd': pred_tlfd,
+            'observed_tlfd': obs,
             'objective': res.fun,
-            'predicted': T_pred,
-            'rmse': rmse,
-            'r_squared': r_squared,
+            'bins': np.asarray(bins),
+            'mean_cost_model': self.mean_trip_cost(T_final),
         }
+
+    @staticmethod
+    def mean_cost_from_od(T_obs, cost_matrix):
+        """観測OD行列とコスト行列から平均トリップコストを計算"""
+        total = T_obs.sum()
+        if total > 0:
+            return np.sum(T_obs * cost_matrix) / total
+        return 0.0
+
+    @staticmethod
+    def tlfd_from_od(T_obs, cost_matrix, bins):
+        """観測OD行列からトリップ長頻度分布を計算"""
+        mask = np.ones_like(T_obs, dtype=bool)
+        np.fill_diagonal(mask, False)
+        freq, _ = np.histogram(cost_matrix[mask], bins=bins,
+                                weights=T_obs[mask])
+        return freq

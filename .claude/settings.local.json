@@ -17,7 +17,11 @@
       "Bash(curl -s \"https://raw.githubusercontent.com/HanZhengIntelliTransport/GMNS_Plus_Dataset/main/SiouxFalls/node.csv\")",
       "Bash(python3 -c \"import json,sys; data=json.load\\(sys.stdin\\); [print\\(d['name']\\) for d in data if 'sioux' in d['name'].lower\\(\\) or 'Sioux' in d['name']]\")",
       "Bash(curl *)",
-      "Bash(python *)"
+      "Bash(python *)",
+      "Bash(code *)",
+      "Bash(python3 -c \"import sys,json; [print\\(f['name']\\) for f in json.loads\\(sys.stdin.read\\(\\)\\)]\")",
+      "Bash(python3 -c \" import sys, json nb = json.loads\\(sys.stdin.read\\(\\)\\) for i, cell in enumerate\\(nb['cells']\\): if cell['cell_type'] == 'code' and cell.get\\('outputs'\\): for out in cell['outputs']: if out.get\\('text'\\): text = ''.join\\(out['text']\\) if any\\(k in text.lower\\(\\) for k in ['rel_gap', 'gap', 'time', 'iter', 'リンクフロー差']\\): print\\(f'--- Cell {i} output ---'\\) print\\(text\\) \")",
+      "Bash(python3 -c ' *)"
     ]
   }
 }

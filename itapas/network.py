@@ -47,6 +47,12 @@ class Network:
         self.link_alpha = df['vdf_alpha'].values.astype(float)
         self.link_beta = df['vdf_beta'].values.astype(float)
 
+        # リンクトール (vdf_toll列があれば読込、なければゼロ)
+        if 'vdf_toll' in df.columns:
+            self.link_toll = df['vdf_toll'].fillna(0.0).values.astype(float)
+        else:
+            self.link_toll = np.zeros(self.num_links, dtype=float)
+
     def _load_demand(self, demand_csv):
         df = pd.read_csv(demand_csv)
         self.demand = {}

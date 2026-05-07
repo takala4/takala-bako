@@ -25,6 +25,15 @@ class ITAPAS:
         self.cost_deriv = cost_deriv
         self.cost_integral = cost_integral
 
+        # 実行時にsolve()で設定 (mode/tollsに応じて切替)
+        self._alpha_eff = network.link_alpha
+        self._toll = np.zeros(network.num_links, dtype=float)
+        self._mode = 'UE'
+
+        # solve()後に格納される最適トール (Pigovianトール τ* = f · t'(f))
+        # SOモードでこれを既存トールに加算してUE配分すると、SOフローを再現する
+        self.optimal_toll = None
+
         E = network.num_links
         N = network.num_nodes
 
@@ -85,11 +94,42 @@ class ITAPAS:
 
     def solve(self, max_iter=50, gap_threshold=1e-6, time_limit=1200,
               epsilon=1e-12, theta=1e-12, mu=1e-3,
-              inner_iterations=20, verbose=True):
-        """iTAPASアルゴリズムによる均衡配分の実行 (参考実装準拠)"""
+              inner_iterations=20, verbose=True,
+              mode='UE', tolls=None):
+        """iTAPASアルゴリズムによる均衡配分の実行 (参考実装準拠)
+
+        Parameters
+        ----------
+        mode : {'UE', 'SO'}
+            'UE': 利用者均衡 (Wardrop第一原理)
+            'SO': システム最適 (Wardrop第二原理) — マージナルコスト法で求解
+        tolls : ndarray or None
+            リンク別トール (与件)。Noneの場合は network.link_toll を使用。
+            一般化費用に加算される (SOモードでも同様にユーザー側支払分として加算)。
+        """
         net = self.net
         E = net.num_links
         start_time = time.time()
+
+        # === モード/トール設定 ===
+        if mode not in ('UE', 'SO'):
+            raise ValueError(f"mode must be 'UE' or 'SO', got {mode!r}")
+        self._mode = mode
+
+        if tolls is None:
+            self._toll = np.asarray(net.link_toll, dtype=float).copy()
+        else:
+            tolls_arr = np.asarray(tolls, dtype=float)
+            if tolls_arr.shape != (E,):
+                raise ValueError(f"tolls must have shape ({E},), got {tolls_arr.shape}")
+            self._toll = tolls_arr.copy()
+
+        # SOではマージナルコスト mc(f) = fftt*(1 + alpha*(1+beta)*(f/c)^beta) なので
+        # alpha_eff = alpha*(1+beta) を用いれば既存BPR形式で計算可能
+        if mode == 'SO':
+            self._alpha_eff = net.link_alpha * (1.0 + net.link_beta)
+        else:
+            self._alpha_eff = net.link_alpha.astype(float, copy=True)
 
         # === Step 0: 初期化 (All-or-Nothing) ===
         link_flow = np.zeros(E)
@@ -219,17 +259,36 @@ class ITAPAS:
                     print("Converged.")
                 break
 
+        # === Pigovianトール (混雑外部性) を計算 ===
+        # τ*_a = f_a · t'_a(f_a) — 実際の旅行時間関数 t の導関数を使う
+        # (self._alpha_eff ではなく net.link_alpha を使う点に注意:
+        #  SOモードではマージナルコストの導関数になってしまうため)
+        tt_deriv = self.cost_deriv(link_flow, net.link_fftt, net.link_capacity,
+                                    net.link_alpha, net.link_beta)
+        self.optimal_toll = link_flow * tt_deriv
+        if verbose and self._mode == 'SO':
+            print(f"Optimal (Pigovian) toll: "
+                  f"min={self.optimal_toll.min():.3f}, "
+                  f"max={self.optimal_toll.max():.3f}, "
+                  f"mean={self.optimal_toll.mean():.3f}")
+
         return link_flow, log
 
     def _compute_cost(self, flow):
+        """一般化リンク費用 (UE: t(f)+toll, SO: t(f)+f·t'(f)+toll)
+
+        SOモードでは alpha_eff = alpha*(1+beta) を渡すことで、
+        BPR関数形式そのままでマージナルコストを計算する。
+        """
         net = self.net
         return self.cost_func(flow, net.link_fftt, net.link_capacity,
-                              net.link_alpha, net.link_beta)
+                              self._alpha_eff, net.link_beta) + self._toll
 
     def _compute_cost_deriv(self, flow):
+        """一般化リンク費用の導関数 (トールはフローに依らないため寄与なし)"""
         net = self.net
         return self.cost_deriv(flow, net.link_fftt, net.link_capacity,
-                               net.link_alpha, net.link_beta)
+                               self._alpha_eff, net.link_beta)
 
     def _get_spt_path(self, pred, origin, target):
         """SPT上のorigin→targetの経路をリンクインデックスのタプルで返す"""
@@ -365,14 +424,16 @@ class ITAPAS:
                         for e in cycle_links:
                             local_flow_map[e] -= delta
                             flow_map[e] -= delta
-                        # コスト更新
+                        # コスト更新 (alpha_eff・toll を反映: SOモード/トール対応)
                         n = self.net
+                        alpha_eff = self._alpha_eff
+                        toll = self._toll
                         for e in cycle_links:
                             f = max(flow_map[e], 0.0)
                             ratio = f / n.link_capacity[e]
                             rb = ratio ** n.link_beta[e]
-                            cost_map[e] = n.link_fftt[e] * (1.0 + n.link_alpha[e] * rb)
-                            cost_de_map[e] = n.link_fftt[e] * n.link_alpha[e] * n.link_beta[e] * rb / f if f > 1e-20 else 0.0
+                            cost_map[e] = n.link_fftt[e] * (1.0 + alpha_eff[e] * rb) + toll[e]
+                            cost_de_map[e] = n.link_fftt[e] * alpha_eff[e] * n.link_beta[e] * rb / f if f > 1e-20 else 0.0
 
                     if local_flow_map[e0_idx] < epsilon:
                         return None
@@ -440,19 +501,20 @@ class ITAPAS:
             if delta < -f1:
                 delta = -f1
 
-        # フローシフト + コスト更新
+        # フローシフト + コスト更新 (alpha_eff・toll を反映: SOモード/トール対応)
         net = self.net
         fftt = net.link_fftt
         cap = net.link_capacity
-        alpha = net.link_alpha
+        alpha = self._alpha_eff
         beta = net.link_beta
+        toll = self._toll
         for e in seg1:
             link_flow[e] += delta
             local_flow[e] += delta
             f = link_flow[e] if link_flow[e] > 0.0 else 0.0
             ratio = f / cap[e]
             rb = ratio ** beta[e]
-            link_cost[e] = fftt[e] * (1.0 + alpha[e] * rb)
+            link_cost[e] = fftt[e] * (1.0 + alpha[e] * rb) + toll[e]
             link_cost_de[e] = fftt[e] * alpha[e] * beta[e] * rb / f if f > 1e-20 else 0.0
         for e in seg2:
             link_flow[e] -= delta
@@ -460,7 +522,7 @@ class ITAPAS:
             f = link_flow[e] if link_flow[e] > 0.0 else 0.0
             ratio = f / cap[e]
             rb = ratio ** beta[e]
-            link_cost[e] = fftt[e] * (1.0 + alpha[e] * rb)
+            link_cost[e] = fftt[e] * (1.0 + alpha[e] * rb) + toll[e]
             link_cost_de[e] = fftt[e] * alpha[e] * beta[e] * rb / f if f > 1e-20 else 0.0
 
         return (f1 + delta, f2 - delta)
